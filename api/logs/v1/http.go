@@ -3,6 +3,7 @@ package http
 
 import (
 	stdtls "crypto/tls"
+	"github.com/observatorium/api/server"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -150,6 +151,7 @@ func NewHandler(read, tail, write, rules *url.URL, rulesReadOnly bool, upstreamC
 	}
 
 	r := chi.NewRouter()
+	r.Use(server.StripTenantPrefix("/api/v1/logs"))
 
 	if read != nil {
 		var proxyRead http.Handler
