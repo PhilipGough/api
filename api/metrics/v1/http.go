@@ -153,6 +153,7 @@ func NewHandler(read, write, rulesEndpoint *url.URL, upstreamCA []byte, upstream
 	r.Use(func(handler http.Handler) http.Handler {
 		return c.instrument.NewHandler(nil, handler)
 	})
+	r.Use(server.StripTenantPrefix("/api/metrics/v1"))
 
 	if read != nil {
 		var proxyQuery http.Handler
@@ -178,7 +179,6 @@ func NewHandler(read, write, rulesEndpoint *url.URL, upstreamCA []byte, upstream
 		}
 		r.Group(func(r chi.Router) {
 			r.Use(c.queryMiddlewares...)
-			r.Use(server.StripTenantPrefix("/api/metrics/v1"))
 			r.Handle(QueryRoute, otelhttp.WithRouteTag(c.spanRoutePrefix+QueryRoute, proxyQuery))
 			r.Handle(QueryRangeRoute, otelhttp.WithRouteTag(c.spanRoutePrefix+QueryRangeRoute, proxyQuery))
 		})
@@ -207,7 +207,6 @@ func NewHandler(read, write, rulesEndpoint *url.URL, upstreamCA []byte, upstream
 		}
 		r.Group(func(r chi.Router) {
 			r.Use(c.readMiddlewares...)
-			r.Use(server.StripTenantPrefix("/api/metrics/v1"))
 			r.Handle(SeriesRoute, otelhttp.WithRouteTag(c.spanRoutePrefix+SeriesRoute, proxyRead))
 			r.Handle(LabelNamesRoute, otelhttp.WithRouteTag(c.spanRoutePrefix+LabelNamesRoute, proxyRead))
 			r.Handle(LabelValuesRoute, otelhttp.WithRouteTag(c.spanRoutePrefix+LabelValuesRoute, proxyRead))
@@ -235,7 +234,6 @@ func NewHandler(read, write, rulesEndpoint *url.URL, upstreamCA []byte, upstream
 		}
 		r.Group(func(r chi.Router) {
 			r.Use(c.uiMiddlewares...)
-			r.Use(server.StripTenantPrefix("/api/metrics/v1"))
 			r.Mount(UIRoute, otelhttp.WithRouteTag(c.spanRoutePrefix+UIRoute, uiProxy))
 		})
 	}
@@ -265,7 +263,6 @@ func NewHandler(read, write, rulesEndpoint *url.URL, upstreamCA []byte, upstream
 		}
 		r.Group(func(r chi.Router) {
 			r.Use(c.writeMiddlewares...)
-			r.Use(server.StripTenantPrefix("/api/metrics/v1"))
 			r.Handle(ReceiveRoute, otelhttp.WithRouteTag(c.spanRoutePrefix+ReceiveRoute, proxyWrite))
 		})
 	}
@@ -281,14 +278,12 @@ func NewHandler(read, write, rulesEndpoint *url.URL, upstreamCA []byte, upstream
 
 		r.Group(func(r chi.Router) {
 			r.Use(c.uiMiddlewares...)
-			r.Use(server.StripTenantPrefix("/api/metrics/v1"))
 			r.Method(http.MethodGet, RulesRoute, otelhttp.WithRouteTag(c.spanRoutePrefix+RulesRawRoute, http.HandlerFunc(rh.get)))
 			r.Method(http.MethodGet, RulesRawRoute, otelhttp.WithRouteTag(c.spanRoutePrefix+RulesRawRoute, http.HandlerFunc(rh.get)))
 		})
 
 		r.Group(func(r chi.Router) {
 			r.Use(c.writeMiddlewares...)
-			r.Use(server.StripTenantPrefix("/api/metrics/v1"))
 			r.Method(http.MethodPut, RulesRawRoute, otelhttp.WithRouteTag(c.spanRoutePrefix+RulesRawRoute, http.HandlerFunc(rh.put)))
 		})
 	}
