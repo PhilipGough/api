@@ -42,6 +42,8 @@ func PathsHandlerFunc(logger log.Logger, routes []chi.Route) http.HandlerFunc {
 	}
 }
 
+// StripTenantPrefix strips the given prefix plus the tenant from the request's URL path.
+// This information is NOT lost, but put in the request's context.
 func StripTenantPrefix(prefix string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

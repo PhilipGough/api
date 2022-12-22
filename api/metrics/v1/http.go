@@ -47,7 +47,6 @@ type handlerConfiguration struct {
 	readMiddlewares  []func(http.Handler) http.Handler
 	uiMiddlewares    []func(http.Handler) http.Handler
 	writeMiddlewares []func(http.Handler) http.Handler
-	labelParser      func(r *http.Request) prometheus.Labels
 }
 
 // HandlerOption modifies the handler's configuration.

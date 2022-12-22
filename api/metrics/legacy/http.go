@@ -31,7 +31,6 @@ type handlerConfiguration struct {
 	spanRoutePrefix  string
 	queryMiddlewares []func(http.Handler) http.Handler
 	uiMiddlewares    []func(http.Handler) http.Handler
-	labelParser      func(r *http.Request) prometheus.Labels
 }
 
 type HandlerOption func(h *handlerConfiguration)

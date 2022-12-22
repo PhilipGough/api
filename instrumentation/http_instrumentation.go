@@ -69,7 +69,7 @@ type instrumentedHandlerFactory struct {
 func (m instrumentedHandlerFactory) NewHandler(extraLabels prometheus.Labels, next http.Handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if len(extraLabels) == 0 {
-			if labels := chiLabelParser(r); len(labels) != 0 {
+			if labels := httpHandlerLabels(r); len(labels) != 0 {
 				extraLabels = labels
 			}
 		}
@@ -108,10 +108,7 @@ func NewInstrumentedHandlerFactory(req *prometheus.Registry) instrumentedHandler
 	}
 }
 
-// ExtraLabelContextKey is the key for the extra labels in the request context.
-var ExtraLabelContextKey = struct{}{}
-
-func chiLabelParser(r *http.Request) prometheus.Labels {
+func httpHandlerLabels(r *http.Request) prometheus.Labels {
 	extraLabels := prometheus.Labels{
 		"handler": "unknown",
 		"group":   "unknown",
