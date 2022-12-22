@@ -1,4 +1,4 @@
-package server
+package instrumentation
 
 import (
 	"net/http"

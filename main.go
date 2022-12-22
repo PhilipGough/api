@@ -8,6 +8,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/observatorium/api/instrumentation"
 	stdlog "log"
 	"net"
 	"net/http"
@@ -53,10 +54,8 @@ import (
 	"github.com/observatorium/api/authentication"
 
 	"github.com/observatorium/api/authorization"
-	"github.com/observatorium/api/httperr"
 	"github.com/observatorium/api/logger"
 	"github.com/observatorium/api/opa"
-	"github.com/observatorium/api/proxy"
 	"github.com/observatorium/api/ratelimit"
 	"github.com/observatorium/api/rbac"
 	"github.com/observatorium/api/server"
@@ -504,10 +503,9 @@ func main() {
 		// With default value of zero backlog concurrent requests crossing a rate-limit result in non-200 HTTP response.
 		r.Use(middleware.ThrottleBacklog(cfg.middleware.concurrentRequestLimit,
 			cfg.middleware.backLogLimitConcurrentRequests, cfg.middleware.backLogDurationConcurrentRequests))
-		r.Use(server.Logger(logger))
+		r.Use(instrumentation.Logger(logger))
 
-		hardcodedLabels := []string{"group", "handler"}
-		instrumenter := server.NewInstrumentedHandlerFactory(reg, hardcodedLabels)
+		instrumenter := instrumentation.NewInstrumentedHandlerFactory(reg)
 
 		var (
 			tenantIDs   = map[string]string{}
@@ -614,7 +612,6 @@ func main() {
 						metricsUpstreamClientCert,
 						metricslegacy.WithLogger(logger),
 						metricslegacy.WithRegistry(reg),
-						metricslegacy.WithLabelParser(chiLabelParser),
 						metricslegacy.WithHandlerInstrumenter(instrumenter),
 						metricslegacy.WithGlobalMiddleware(metricsMiddlewares...),
 						metricslegacy.WithSpanRoutePrefix("/api/v1/{tenant}"),
@@ -631,7 +628,6 @@ func main() {
 						metricsUpstreamClientCert,
 						metricsv1.WithLogger(logger),
 						metricsv1.WithRegistry(reg),
-						metricsv1.WithLabelParser(chiLabelParser),
 						metricsv1.WithHandlerInstrumenter(instrumenter),
 						metricsv1.WithSpanRoutePrefix("/api/metrics/v1/{tenant}"),
 						metricsv1.WithTenantLabel(cfg.metrics.tenantLabel),
@@ -1227,6 +1223,7 @@ func blockNonDefinedMethods() http.HandlerFunc {
 }
 
 // Permissions required for each gRPC method.
+//
 //nolint:gochecknoglobals (this would be a const if Golang allowed const maps)
 var gRPCRBAC = authorization.GRPCRBac{
 	// "opentelemetry.proto.collector.trace.v1.TraceService/Export" requires "traces" "write" perm.
@@ -1299,61 +1296,4 @@ func newGRPCServer(cfg *config, tenantHeader string, tenantIDs map[string]string
 	gs := grpc.NewServer(opts...)
 
 	return gs, nil
-}
-
-type groupHandler struct {
-	group   string
-	handler string
-}
-
-var legacyMetricsGroup = map[string]groupHandler{
-	metricslegacy.QueryRoute:      {"metricslegacy", "query"},
-	metricslegacy.QueryRangeRoute: {"metricslegacy", "query_range"},
-}
-
-var metricsV1Group = map[string]groupHandler{
-	metricsv1.UIRoute:          {"metricsv1", "ui"},
-	metricsv1.QueryRoute:       {"metricsv1", "query"},
-	metricsv1.QueryRangeRoute:  {"metricsv1", "query_range"},
-	metricsv1.SeriesRoute:      {"metricsv1", "series"},
-	metricsv1.LabelNamesRoute:  {"metricsv1", "labels"},
-	metricsv1.LabelValuesRoute: {"metricsv1", "labelvalues"},
-	metricsv1.ReceiveRoute:     {"metricsv1", "receive"},
-	metricsv1.RulesRoute:       {"metricsv1", "rules"},
-	metricsv1.RulesRawRoute:    {"metricsv1", "rules"},
-}
-
-func chiLabelParser(r *http.Request) prometheus.Labels {
-	extraLabels := prometheus.Labels{
-		"handler": "unknown",
-		"group":   "unknown",
-	}
-
-	routePattern := chi.RouteContext(r.Context()).RoutePattern()
-	tenant, ok := authentication.GetTenant(r.Context())
-	if !ok {
-		return extraLabels
-	}
-
-	var groupHandler map[string]groupHandler
-	switch routePattern {
-	case "/api/metrics/v1/{tenant}/*":
-		groupHandler = metricsV1Group
-	case "/api/v1/{tenant}/*":
-		groupHandler = legacyMetricsGroup
-	}
-
-	strippedPath := strings.Split(r.URL.Path, tenant)
-	if len(strippedPath) != 2 {
-		return extraLabels
-	}
-
-	gh, ok := groupHandler[strippedPath[1]]
-	if ok {
-		extraLabels = prometheus.Labels{
-			"group":   gh.group,
-			"handler": gh.handler,
-		}
-	}
-	return extraLabels
 }

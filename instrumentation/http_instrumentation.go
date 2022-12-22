@@ -1,9 +1,12 @@
-package server
+package instrumentation
 
 import (
-	"context"
+	"github.com/go-chi/chi"
+	metricslegacy "github.com/observatorium/api/api/metrics/legacy"
+	metricsv1 "github.com/observatorium/api/api/metrics/v1"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/middleware"
@@ -21,20 +24,20 @@ type httpMetricsCollector struct {
 }
 
 // newHTTPMetricsCollector creates a new httpMetricsCollector.
-func newHTTPMetricsCollector(reg *prometheus.Registry, hardcodedLabels []string) httpMetricsCollector {
+func newHTTPMetricsCollector(reg *prometheus.Registry) httpMetricsCollector {
 	m := httpMetricsCollector{
 		requestCounter: promauto.With(reg).NewCounterVec(prometheus.CounterOpts{
 			Name: "http_requests_total",
 			Help: "Counter of HTTP requests.",
 		},
-			append(hardcodedLabels, "code", "method", "tenant"),
+			[]string{"group", "handler", "code", "method", "tenant"},
 		),
 		requestSize: promauto.With(reg).NewSummaryVec(
 			prometheus.SummaryOpts{
 				Name: "http_request_size_bytes",
 				Help: "Size of HTTP requests.",
 			},
-			append(hardcodedLabels, "code", "method", "tenant"),
+			[]string{"group", "handler", "code", "method", "tenant"},
 		),
 		requestDuration: promauto.With(reg).NewHistogramVec(
 			prometheus.HistogramOpts{
@@ -42,7 +45,7 @@ func newHTTPMetricsCollector(reg *prometheus.Registry, hardcodedLabels []string)
 				Help:    "Histogram of latencies for HTTP requests.",
 				Buckets: []float64{.1, .2, .4, 1, 2.5, 5, 8, 20, 60, 120},
 			},
-			append(hardcodedLabels, "code", "method", "tenant"),
+			[]string{"group", "handler", "code", "method", "tenant"},
 		),
 		responseSize: promauto.With(reg).NewHistogramVec(
 			prometheus.HistogramOpts{
@@ -50,7 +53,7 @@ func newHTTPMetricsCollector(reg *prometheus.Registry, hardcodedLabels []string)
 				Help:    "Histogram of response size for HTTP requests.",
 				Buckets: prometheus.ExponentialBuckets(100, 10, 8),
 			},
-			append(hardcodedLabels, "code", "method", "tenant"),
+			[]string{"group", "handler", "code", "method", "tenant"},
 		),
 	}
 	return m
@@ -62,15 +65,12 @@ type instrumentedHandlerFactory struct {
 }
 
 // NewHandler creates a new instrumented HTTP handler with the given extra labels and calling the "next" handlers.
+// If no extra labels are provided, we fetch them from request metadata.
 func (m instrumentedHandlerFactory) NewHandler(extraLabels prometheus.Labels, next http.Handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// if no extra labels are provided check for them in the context
 		if len(extraLabels) == 0 {
-			if labels := r.Context().Value(ExtraLabelContextKey); labels != nil {
-				ctxLabels, ok := labels.(prometheus.Labels)
-				if ok {
-					extraLabels = ctxLabels
-				}
+			if labels := chiLabelParser(r); len(labels) != 0 {
+				extraLabels = labels
 			}
 		}
 		rw := middleware.NewWrapResponseWriter(w, r.ProtoMajor)
@@ -102,24 +102,70 @@ func (m instrumentedHandlerFactory) NewHandler(extraLabels prometheus.Labels, ne
 }
 
 // NewInstrumentedHandlerFactory creates a new instrumentedHandlerFactory.
-func NewInstrumentedHandlerFactory(req *prometheus.Registry, hardcodedLabels []string) instrumentedHandlerFactory {
+func NewInstrumentedHandlerFactory(req *prometheus.Registry) instrumentedHandlerFactory {
 	return instrumentedHandlerFactory{
-		metricsCollector: newHTTPMetricsCollector(req, hardcodedLabels),
+		metricsCollector: newHTTPMetricsCollector(req),
 	}
 }
 
 // ExtraLabelContextKey is the key for the extra labels in the request context.
-const ExtraLabelContextKey = "extraLabels"
+var ExtraLabelContextKey = struct{}{}
 
-// InstrumentationMiddleware calls the provided labelParser to parse the extra labels from the request and adds them to the context.
-func InstrumentationMiddleware(labelParser func(r *http.Request) prometheus.Labels) func(next http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			rw := middleware.NewWrapResponseWriter(w, r.ProtoMajor)
-			ctx := context.WithValue(r.Context(), ExtraLabelContextKey, labelParser(r))
-			next.ServeHTTP(rw, r.WithContext(ctx))
-		})
+func chiLabelParser(r *http.Request) prometheus.Labels {
+	extraLabels := prometheus.Labels{
+		"handler": "unknown",
+		"group":   "unknown",
 	}
+
+	routePattern := chi.RouteContext(r.Context()).RoutePattern()
+	tenant, ok := authentication.GetTenant(r.Context())
+	if !ok {
+		return extraLabels
+	}
+
+	var groupHandler map[string]groupHandler
+	switch routePattern {
+	case "/api/metrics/v1/{tenant}/*":
+		groupHandler = metricsV1Group
+	case "/api/v1/{tenant}/*":
+		groupHandler = legacyMetricsGroup
+	}
+
+	strippedPath := strings.Split(r.URL.Path, tenant)
+	if len(strippedPath) != 2 {
+		return extraLabels
+	}
+
+	gh, ok := groupHandler[strippedPath[1]]
+	if ok {
+		extraLabels = prometheus.Labels{
+			"group":   gh.group,
+			"handler": gh.handler,
+		}
+	}
+	return extraLabels
+}
+
+type groupHandler struct {
+	group   string
+	handler string
+}
+
+var legacyMetricsGroup = map[string]groupHandler{
+	metricslegacy.QueryRoute:      {"metricslegacy", "query"},
+	metricslegacy.QueryRangeRoute: {"metricslegacy", "query_range"},
+}
+
+var metricsV1Group = map[string]groupHandler{
+	metricsv1.UIRoute:          {"metricsv1", "ui"},
+	metricsv1.QueryRoute:       {"metricsv1", "query"},
+	metricsv1.QueryRangeRoute:  {"metricsv1", "query_range"},
+	metricsv1.SeriesRoute:      {"metricsv1", "series"},
+	metricsv1.LabelNamesRoute:  {"metricsv1", "labels"},
+	metricsv1.LabelValuesRoute: {"metricsv1", "labelvalues"},
+	metricsv1.ReceiveRoute:     {"metricsv1", "receive"},
+	metricsv1.RulesRoute:       {"metricsv1", "rules"},
+	metricsv1.RulesRawRoute:    {"metricsv1", "rules"},
 }
 
 // Copied from https://github.com/prometheus/client_golang/blob/9075cdf61646b5adf54d3ba77a0e4f6c65cb4fd7/prometheus/promhttp/instrument_server.go#L350

@@ -14,7 +14,6 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
 	"github.com/observatorium/api/proxy"
-	"github.com/observatorium/api/server"
 	"github.com/observatorium/api/tls"
 )
 
@@ -84,13 +83,6 @@ func WithGlobalMiddleware(m ...func(http.Handler) http.Handler) HandlerOption {
 	}
 }
 
-// WithLabelParser adds a custom label parser to the handler.
-func WithLabelParser(labelParser func(r *http.Request) prometheus.Labels) HandlerOption {
-	return func(h *handlerConfiguration) {
-		h.labelParser = labelParser
-	}
-}
-
 type handlerInstrumenter interface {
 	NewHandler(labels prometheus.Labels, handler http.Handler) http.HandlerFunc
 }
@@ -113,7 +105,6 @@ func NewHandler(url *url.URL, upstreamCA []byte, upstreamCert *stdtls.Certificat
 	}
 
 	r := chi.NewRouter()
-	r.Use(server.InstrumentationMiddleware(c.labelParser))
 	r.Use(func(handler http.Handler) http.Handler {
 		return c.instrument.NewHandler(nil, handler)
 	})
