@@ -1180,19 +1180,6 @@ func parseFlags() (config, error) {
 	return cfg, nil
 }
 
-func stripTenantPrefix(prefix string, next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		tenant, ok := authentication.GetTenant(r.Context())
-		if !ok {
-			httperr.PrometheusAPIError(w, "tenant not found", http.StatusInternalServerError)
-			return
-		}
-
-		tenantPrefix := path.Join("/", prefix, tenant)
-		http.StripPrefix(tenantPrefix, proxy.WithPrefix(tenantPrefix, next)).ServeHTTP(w, r)
-	})
-}
-
 func unmarshalLegacyAuthenticatorConfig(v interface{}) (map[string]interface{}, error) {
 	jsonBytes, err := json.Marshal(v)
 	if err != nil {
