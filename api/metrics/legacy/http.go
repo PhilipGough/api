@@ -2,6 +2,7 @@ package legacy
 
 import (
 	stdtls "crypto/tls"
+	"github.com/observatorium/api/server"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -31,6 +32,7 @@ type handlerConfiguration struct {
 	spanRoutePrefix  string
 	queryMiddlewares []func(http.Handler) http.Handler
 	uiMiddlewares    []func(http.Handler) http.Handler
+	mountedAt        string
 }
 
 type HandlerOption func(h *handlerConfiguration)
@@ -53,10 +55,11 @@ func WithHandlerInstrumenter(instrumenter handlerInstrumenter) HandlerOption {
 	}
 }
 
-// WithSpanRoutePrefix adds a prefix before the value of route tag in tracing spans.
-func WithSpanRoutePrefix(spanRoutePrefix string) HandlerOption {
+// WithPrefix indicates where in the mux the handler is being mounted.
+func WithPrefix(prefix string) HandlerOption {
 	return func(h *handlerConfiguration) {
-		h.spanRoutePrefix = spanRoutePrefix
+		h.mountedAt = prefix
+		h.spanRoutePrefix = prefix
 	}
 }
 
@@ -107,6 +110,9 @@ func NewHandler(url *url.URL, upstreamCA []byte, upstreamCert *stdtls.Certificat
 	r.Use(func(handler http.Handler) http.Handler {
 		return c.instrument.NewHandler(nil, handler)
 	})
+	if len(c.mountedAt) != 0 {
+		r.Use(server.StripTenantPrefix(c.mountedAt))
+	}
 
 	var legacyProxy http.Handler
 	{

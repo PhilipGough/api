@@ -47,6 +47,7 @@ type handlerConfiguration struct {
 	readMiddlewares  []func(http.Handler) http.Handler
 	uiMiddlewares    []func(http.Handler) http.Handler
 	writeMiddlewares []func(http.Handler) http.Handler
+	mountedAt        string
 }
 
 // HandlerOption modifies the handler's configuration.
@@ -73,10 +74,11 @@ func WithHandlerInstrumenter(instrumenter handlerInstrumenter) HandlerOption {
 	}
 }
 
-// WithSpanRoutePrefix adds a prefix before the value of route tag in tracing spans.
-func WithSpanRoutePrefix(spanRoutePrefix string) HandlerOption {
+// WithPrefix indicates where in the mux the handler is being mounted.
+func WithPrefix(prefix string) HandlerOption {
 	return func(h *handlerConfiguration) {
-		h.spanRoutePrefix = spanRoutePrefix
+		h.mountedAt = prefix
+		h.spanRoutePrefix = prefix
 	}
 }
 
@@ -152,7 +154,9 @@ func NewHandler(read, write, rulesEndpoint *url.URL, upstreamCA []byte, upstream
 	r.Use(func(handler http.Handler) http.Handler {
 		return c.instrument.NewHandler(nil, handler)
 	})
-	r.Use(server.StripTenantPrefix("/api/metrics/v1"))
+	if len(c.mountedAt) != 0 {
+		r.Use(server.StripTenantPrefix(c.mountedAt))
+	}
 
 	if read != nil {
 		var proxyQuery http.Handler

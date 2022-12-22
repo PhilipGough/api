@@ -2,16 +2,14 @@ package server
 
 import (
 	"encoding/json"
-	"net/http"
-	"path"
-
-	"github.com/observatorium/api/authentication"
-	"github.com/observatorium/api/httperr"
-	"github.com/observatorium/api/proxy"
-
 	"github.com/go-chi/chi"
 	"github.com/go-kit/log"
 	"github.com/go-kit/log/level"
+	"github.com/observatorium/api/authentication"
+	"github.com/observatorium/api/httperr"
+	"github.com/observatorium/api/proxy"
+	"net/http"
+	"strings"
 )
 
 // PathsHandlerFunc lists all paths available from the provided routes.
@@ -53,7 +51,7 @@ func StripTenantPrefix(prefix string) func(http.Handler) http.Handler {
 				return
 			}
 
-			tenantPrefix := path.Join("/", prefix, tenant)
+			tenantPrefix := strings.Replace(prefix, "{tenant}", tenant, 1)
 			http.StripPrefix(tenantPrefix, proxy.WithPrefix(tenantPrefix, next)).ServeHTTP(w, r)
 		})
 	}
