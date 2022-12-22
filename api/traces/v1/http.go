@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	stdtls "crypto/tls"
 	"fmt"
+	"github.com/observatorium/api/server"
 	"io"
 	"net"
 	"net/http"
@@ -114,6 +115,7 @@ func NewV2Handler(read *url.URL, readTemplate string, upstreamCA []byte, upstrea
 	}
 
 	r := chi.NewRouter()
+	r.Use(server.StripTenantPrefix("/api/traces/v1"))
 
 	var proxyRead http.Handler
 	{

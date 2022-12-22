@@ -698,20 +698,18 @@ func main() {
 					}
 
 					r.Mount("/api/traces/v1/{tenant}",
-						stripTenantPrefix("/api/traces/v1",
-							tracesv1.NewV2Handler(
-								cfg.traces.readEndpoint,
-								cfg.traces.readTemplateEndpoint,
-								tracesUpstreamCACert,
-								tracesUpstreamClientCert,
-								tracesv1.Logger(logger),
-								tracesv1.WithRegistry(reg),
-								tracesv1.WithHandlerInstrumenter(instrumenter),
-								tracesv1.WithSpanRoutePrefix("/api/traces/v1/{tenant}"),
-								tracesv1.WithReadMiddleware(authorization.WithAuthorizers(authorizers, rbac.Read, "traces")),
-								tracesv1.WithReadMiddleware(logsv1.WithEnforceAuthorizationLabels()),
-								tracesv1.WithWriteMiddleware(authorization.WithAuthorizers(authorizers, rbac.Write, "traces")),
-							),
+						tracesv1.NewV2Handler(
+							cfg.traces.readEndpoint,
+							cfg.traces.readTemplateEndpoint,
+							tracesUpstreamCACert,
+							tracesUpstreamClientCert,
+							tracesv1.Logger(logger),
+							tracesv1.WithRegistry(reg),
+							tracesv1.WithHandlerInstrumenter(instrumenter),
+							tracesv1.WithSpanRoutePrefix("/api/traces/v1/{tenant}"),
+							tracesv1.WithReadMiddleware(authorization.WithAuthorizers(authorizers, rbac.Read, "traces")),
+							tracesv1.WithReadMiddleware(logsv1.WithEnforceAuthorizationLabels()),
+							tracesv1.WithWriteMiddleware(authorization.WithAuthorizers(authorizers, rbac.Write, "traces")),
 						),
 					)
 				})
