@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi"
+	"github.com/go-kit/log"
+	"github.com/go-kit/log/level"
 	"github.com/observatorium/api/httperr"
 )
 
@@ -80,11 +82,40 @@ func WithAccessToken() Middleware {
 }
 
 // WithTenantHeader returns a new middleware that adds the ID of the tenant to the specified header.
-func WithTenantHeader(header string, tenantIDs map[string]string) Middleware {
+func WithTenantHeader(logger log.Logger, header string, tenantIDs map[string]string, virtualTenants map[string][]string) Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			tenant := chi.URLParam(r, "tenant")
-			r.Header.Set(header, tenantIDs[tenant])
+
+			tenantID := tenantIDs[tenant]
+			virtualTenant := r.Header.Get(header)
+			if virtualTenant != "" {
+				level.Debug(logger).Log("msg", "found forwarded virtual tenant", "virtual_tenant", virtualTenant, "tenant", tenant, "tenant_id", tenantID)
+				// If the header has already been set and forwarded from the client we
+				// need to check if the tenant is a virtual tenant and if so, add the
+				// tenant ID to the header.
+				vts, ok := virtualTenants[tenantID]
+				if ok {
+					var found bool
+					for _, vt := range vts {
+						if vt == virtualTenant {
+							level.Debug(logger).Log("msg", "found virtual tenant in allowed virtual tenant list", "virtual_tenant", virtualTenant, "tenant", tenant)
+							tenantID = virtualTenant
+							found = true
+							break
+						}
+					}
+					if !found {
+						level.Info(logger).Log("msg", "virtual tenant forwarded but not in allowed virtual tenant list",
+							"forwarded", virtualTenant, "virtual_tenants", strings.Join(vts, ","), "tenant", tenant, "tenant_id", tenantID)
+					}
+				} else {
+					level.Info(logger).Log("msg", "virtual tenant forwarded but tenant has no virtual tenants",
+						"forwarded", virtualTenant, "tenant", tenant)
+				}
+			}
+			level.Debug(logger).Log("msg", "setting tenant header", "header", header, "tenant", tenant, "tenant_id", tenantID)
+			r.Header.Set(header, tenantID)
 			next.ServeHTTP(w, r)
 		})
 	}

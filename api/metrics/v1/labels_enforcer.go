@@ -3,19 +3,20 @@ package v1
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/go-kit/log/level"
 	"io"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
 
-	"github.com/prometheus-community/prom-label-proxy/injectproxy"
-	"github.com/prometheus/prometheus/model/labels"
-	"github.com/prometheus/prometheus/promql/parser"
-
+	"github.com/go-kit/log"
 	"github.com/observatorium/api/authentication"
 	"github.com/observatorium/api/authorization"
 	"github.com/observatorium/api/httperr"
+	"github.com/prometheus-community/prom-label-proxy/injectproxy"
+	"github.com/prometheus/prometheus/model/labels"
+	"github.com/prometheus/prometheus/promql/parser"
 )
 
 // WithEnforceTenancyOnQuery returns a middleware that ensures that every query has a tenant label enforced.
@@ -43,6 +44,84 @@ func WithEnforceTenancyOnQuery(tenantLabel string, paramName string) func(http.H
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+// WithEnforceVirtualTenancyOnQuery returns a middleware that ensures that every query has a tenant label enforced.
+func WithEnforceVirtualTenancyOnQuery(logger log.Logger, tenantLabel string, header string, virtualTenants map[string][]string, paramName string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		// Adapted from
+		// https://github.com/prometheus-community/prom-label-proxy/blob/952266db4e0b8ab66b690501e532eaef33300596/injectproxy/routes.go.
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			matchType := labels.MatchEqual
+			tenantID, ok := authentication.GetTenantID(r.Context())
+			if !ok {
+				httperr.PrometheusAPIError(w, "error finding tenant ID", http.StatusInternalServerError)
+				return
+			}
+
+			tenantValue := tenantID
+			if len(virtualTenants[tenantID]) > 0 {
+				level.Debug(logger).Log("msg", "tenant has virtual tenants", "tenant_id", tenantID, "virtual_tenants", strings.Join(virtualTenants[tenantID], ","))
+				matchType = labels.MatchRegexp
+				// assign the typical case where we want to add all the tenants virtual tenants
+				virtualTenantsForTenant := virtualTenants[tenantID]
+				for _, vt := range virtualTenantsForTenant {
+					tenantValue = fmt.Sprintf("%s|%s", tenantValue, vt)
+				}
+				if r.Header.Get(header) != "" {
+					level.Debug(logger).Log("msg", "found forwarded virtual tenant(s)", "virtual_tenant(s)", r.Header.Get(header), "tenant", tenantID)
+					forwardedTenants := removeDuplicate(strings.Split(r.Header.Get(header), ","))
+					if isSubset(forwardedTenants, virtualTenantsForTenant) {
+						tenantValue = ""
+						for _, vt := range forwardedTenants {
+							tenantValue = fmt.Sprintf("%s|%s", tenantValue, vt)
+						}
+						tenantValue = strings.TrimPrefix(tenantValue, "|")
+					} else {
+						level.Warn(logger).Log("msg", "forwarded virtual tenant is not a subset of allowed virtual tenants", "forwarded", r.Header.Get(header), "virtual_tenants", strings.Join(virtualTenantsForTenant, ","), "tenant", tenantID)
+					}
+				}
+			}
+			level.Debug(logger).Log(
+				"msg", "setting value", "tenant", tenantID, "value", tenantValue, "match_type", matchType.String())
+			tenantMatcher := &labels.Matcher{
+				Name:  tenantLabel,
+				Type:  matchType,
+				Value: tenantValue,
+			}
+			e := injectproxy.NewEnforcer(false, tenantMatcher)
+			// If we cannot enforce, don't continue.
+			if ok := enforceRequestQueryLabels(e, paramName, w, r); !ok {
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+func removeDuplicate[T string | int](sliceList []T) []T {
+	allKeys := make(map[T]bool)
+	list := []T{}
+	for _, item := range sliceList {
+		if _, value := allKeys[item]; !value {
+			allKeys[item] = true
+			list = append(list, item)
+		}
+	}
+	return list
+}
+
+func isSubset(subset []string, superset []string) bool {
+	set := make(map[string]bool)
+	for _, element := range superset {
+		set[element] = true
+	}
+	for _, value := range subset {
+		if !set[value] {
+			return false
+		}
+	}
+	return true
 }
 
 // WithEnforceAuthorizationLabels returns a middleware that ensures every query

@@ -199,7 +199,10 @@ type internalTracingConfig struct {
 type tenant struct {
 	Name string `json:"name"`
 	ID   string `json:"id"`
-	OIDC *struct {
+	// VirtualTenants is a list of tenants that are allowed to access this tenant.
+	// If empty, only the parent tenant is allowed to access this tenant.
+	VirtualTenants []string `json:"virtualTenants"`
+	OIDC           *struct {
 		ClientID      string `json:"clientID"`
 		ClientSecret  string `json:"clientSecret"`
 		GroupClaim    string `json:"groupClaim"`
@@ -555,9 +558,10 @@ func main() {
 		}
 
 		var (
-			tenantIDs   = map[string]string{}
-			authorizers = map[string]rbac.Authorizer{}
-			oidcTenants = map[string]struct{}{}
+			tenantIDs      = map[string]string{}
+			virtualTenants = map[string][]string{}
+			authorizers    = map[string]rbac.Authorizer{}
+			oidcTenants    = map[string]struct{}{}
 
 			rateLimits []ratelimit.Config
 			// registrationRetryCount used by authenticator providers to count
@@ -570,6 +574,10 @@ func main() {
 			// Set up common middleware before mounting authN routes.
 			for _, t := range tenantsCfg.Tenants {
 				tenantIDs[t.Name] = t.ID
+				virtualTenants[t.ID] = removeDuplicate(t.VirtualTenants)
+				if len(virtualTenants[t.ID]) > 0 {
+					level.Debug(logger).Log("msg", "adding virtual tenants", "tenant", t.Name, "virtual_tenants", strings.Join(virtualTenants[t.ID], ","))
+				}
 			}
 
 			r.Use(authentication.WithTenant)
@@ -646,7 +654,7 @@ func main() {
 
 				metricsMiddlewares := []func(http.Handler) http.Handler{
 					authentication.WithTenantMiddlewares(pm.Middlewares),
-					authentication.WithTenantHeader(cfg.metrics.tenantHeader, tenantIDs),
+					authentication.WithTenantHeader(logger, cfg.metrics.tenantHeader, tenantIDs, virtualTenants),
 					rateLimitMiddleware,
 				}
 
@@ -693,9 +701,13 @@ func main() {
 						metricsv1.WithGlobalMiddleware(metricsMiddlewares...),
 						metricsv1.WithWriteMiddleware(authorization.WithAuthorizers(authorizers, rbac.Write, "metrics")),
 						metricsv1.WithQueryMiddleware(authorization.WithAuthorizers(authorizers, rbac.Read, "metrics")),
-						metricsv1.WithQueryMiddleware(metricsv1.WithEnforceTenancyOnQuery(cfg.metrics.tenantLabel, queryParamName)),
+						metricsv1.WithQueryMiddleware(
+							metricsv1.WithEnforceVirtualTenancyOnQuery(
+								logger, cfg.metrics.tenantLabel, cfg.metrics.tenantHeader, virtualTenants, queryParamName)),
 						metricsv1.WithReadMiddleware(authorization.WithAuthorizers(authorizers, rbac.Read, "metrics")),
-						metricsv1.WithReadMiddleware(metricsv1.WithEnforceTenancyOnQuery(cfg.metrics.tenantLabel, matchParamName)),
+						metricsv1.WithReadMiddleware(
+							metricsv1.WithEnforceVirtualTenancyOnQuery(
+								logger, cfg.metrics.tenantLabel, cfg.metrics.tenantHeader, virtualTenants, matchParamName)),
 						metricsv1.WithReadMiddleware(metricsv1.WithEnforceAuthorizationLabels()),
 						metricsv1.WithUIMiddleware(authorization.WithAuthorizers(authorizers, rbac.Read, "metrics")),
 						metricsv1.WithAlertmanagerAlertsReadMiddleware(
@@ -735,7 +747,7 @@ func main() {
 								logsv1.WithSpanRoutePrefix("/api/logs/v1/{tenant}"),
 								logsv1.WithWriteMiddleware(writePathRedirectProtection),
 								logsv1.WithGlobalMiddleware(authentication.WithTenantMiddlewares(pm.Middlewares)),
-								logsv1.WithGlobalMiddleware(authentication.WithTenantHeader(cfg.logs.tenantHeader, tenantIDs)),
+								logsv1.WithGlobalMiddleware(authentication.WithTenantHeader(logger, cfg.logs.tenantHeader, tenantIDs, nil)),
 								logsv1.WithReadMiddleware(authorization.WithLogsStreamSelectorsExtractor(logger, cfg.logs.authExtractSelectors)),
 								logsv1.WithReadMiddleware(authorization.WithAuthorizers(authorizers, rbac.Read, "logs")),
 								logsv1.WithReadMiddleware(logsv1.WithEnforceAuthorizationLabels()),
@@ -755,7 +767,7 @@ func main() {
 			if cfg.traces.enabled && (cfg.traces.readEndpoint != nil || cfg.traces.readTemplateEndpoint != "" || cfg.traces.tempoEndpoint != nil) {
 				r.Group(func(r chi.Router) {
 					r.Use(authentication.WithTenantMiddlewares(pm.Middlewares))
-					r.Use(authentication.WithTenantHeader(cfg.traces.tenantHeader, tenantIDs))
+					r.Use(authentication.WithTenantHeader(logger, cfg.traces.tenantHeader, tenantIDs, nil))
 					r.Use(middleware.Timeout(cfg.traces.upstreamWriteTimeout))
 
 					// There can only be one login UI per tenant.  Let metrics be the default; fall back to search
@@ -1485,4 +1497,16 @@ var metricsV1Group = []groupHandler{
 	{"metricsv1", "rules-raw"},
 	{"metricsv1", "alerts"},
 	{"metricsv1", "silences"},
+}
+
+func removeDuplicate[T string | int](sliceList []T) []T {
+	allKeys := make(map[T]bool)
+	list := []T{}
+	for _, item := range sliceList {
+		if _, value := allKeys[item]; !value {
+			allKeys[item] = true
+			list = append(list, item)
+		}
+	}
+	return list
 }
